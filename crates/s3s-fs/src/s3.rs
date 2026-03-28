@@ -410,10 +410,19 @@ impl S3 for FileSystem {
             lhs_key.cmp(rhs_key)
         });
 
-        let objects = if let Some(marker) = &input.start_after {
+        // Determine the resume-after key: use whichever is larger so that
+        // objects already seen via either parameter are never returned again.
+        let resume_after = match (input.continuation_token.as_deref(), input.start_after.as_deref()) {
+            (Some(ct), Some(sa)) => Some(if ct >= sa { ct } else { sa }),
+            (Some(ct), None) => Some(ct),
+            (None, Some(sa)) => Some(sa),
+            (None, None) => None,
+        };
+
+        let objects: Vec<Object> = if let Some(marker) = resume_after {
             objects
                 .into_iter()
-                .skip_while(|n| n.key.as_deref().unwrap_or("") <= marker.as_str())
+                .skip_while(|n| n.key.as_deref().unwrap_or("") <= marker)
                 .collect()
         } else {
             objects
@@ -424,11 +433,14 @@ impl S3 for FileSystem {
         let output = ListObjectsV2Output {
             key_count: Some(key_count),
             max_keys: Some(key_count),
+            is_truncated: Some(false),
             contents: Some(objects),
+            continuation_token: input.continuation_token,
             delimiter: input.delimiter,
             encoding_type: input.encoding_type,
             name: Some(input.bucket),
             prefix: input.prefix,
+            start_after: input.start_after,
             ..Default::default()
         };
         Ok(S3Response::new(output))
